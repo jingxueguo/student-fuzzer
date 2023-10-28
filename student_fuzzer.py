@@ -6,33 +6,58 @@ import traceback
 import numpy as np
 import time
 
+from typing import Any, Set
+
 from bug import entrypoint
 from bug import get_initial_corpus
 
 ## You can re-implement the coverage class to change how
 ## the fuzzer tracks new behavior in the SUT
 
-# class MyCoverage(cv.Coverage):
-#
-#     def coverage(self):
-#         <your implementation here>
-#
-#     etc...
+class MyCoverage(cv.Coverage): # path coverage, not line coverage originally
+    # def __init__(self):
+    #     super.__init__()
+    #     self.branch_coverage = {}
+
+    # def track_branch_coverage(self, function_name, prev_block, cur_block):
+    #     # Implement your custom coverage tracking logic here
+    #     # For example, you might want to track coverage based on specific function or line conditions
+    #     branch_key = (function_name, prev_block, cur_block)
+
+    #     # Update the hash table
+    #     if branch_key in self.branch_coverage:
+    #         self.branch_coverage[branch_key] += 1
+    #     else:
+    #         self.branch_coverage[branch_key] = 1
+    #     pass
+
+    # def coverage(self):
+    #     # custom_coverage = set()
+    #     # for entry in self.trace():
+    #     #     function_name, line_number = entry
+    #     #     # Track custom coverage based on your criteria
+    #     #     self.track_custom_coverage(function_name, line_number)
+    #     #     custom_coverage.add(entry)
+    #     return self.branch_coverage
+    def coverage(self) -> Set[cv.Location]:
+        """The set of executed lines, as (function_name, line_number) pairs"""
+        return set(self.trace())
 
 
-## You can re-implement the runner class to change how
-## the fuzzer tracks new behavior in the SUT
+class MyFunctionCoverageRunner(mf.FunctionRunner):
+    def run_function(self, inp: str) -> Any:
+        with MyCoverage() as cov:
+            try:
+                result = super().run_function(inp)
+            except Exception as exc:
+                self._coverage = cov.coverage()
+                raise exc
 
-# class MyRunner(mf.FunctionRunner):
-#
-#     def run_function(self, inp):
-#           <your implementation here>
-#
-#     def coverage(self):
-#           <your implementation here>
-#
-#     etc...
+        self._coverage = cov.coverage()
+        return result
 
+    def coverage(self) -> Set[cv.Location]:
+        return self._coverage
 
 ## You can re-implement the fuzzer class to change your
 ## fuzzer's overall structure
@@ -62,7 +87,9 @@ from bug import get_initial_corpus
 if __name__ == "__main__":
     seed_inputs = get_initial_corpus()
     fast_schedule = gbf.AFLFastSchedule(5)
-    line_runner = mf.FunctionCoverageRunner(entrypoint)
+    line_runner = MyFunctionCoverageRunner(entrypoint)
 
     fast_fuzzer = gbf.CountingGreyboxFuzzer(seed_inputs, gbf.Mutator(), fast_schedule)
     fast_fuzzer.runs(line_runner, trials=999999999)
+
+# runner is the one that accesses the coverage!
