@@ -1,12 +1,13 @@
 from fuzzingbook import GreyboxFuzzer as gbf
 from fuzzingbook import Coverage as cv
 from fuzzingbook import MutationFuzzer as mf
+from fuzzingbook.Fuzzer import Runner
 
 import traceback
 import numpy as np
 import time
 
-from typing import Any, Set
+from typing import Any, Set, Callable, Tuple
 
 from bug import entrypoint
 from bug import get_initial_corpus
@@ -15,36 +16,49 @@ from bug import get_initial_corpus
 ## the fuzzer tracks new behavior in the SUT
 
 class MyCoverage(cv.Coverage): # path coverage, not line coverage originally
-    # def __init__(self):
-    #     super.__init__()
-    #     self.branch_coverage = {}
-
-    # def track_branch_coverage(self, function_name, prev_block, cur_block):
-    #     # Implement your custom coverage tracking logic here
-    #     # For example, you might want to track coverage based on specific function or line conditions
-    #     branch_key = (function_name, prev_block, cur_block)
-
-    #     # Update the hash table
-    #     if branch_key in self.branch_coverage:
-    #         self.branch_coverage[branch_key] += 1
-    #     else:
-    #         self.branch_coverage[branch_key] = 1
-    #     pass
+    def __init__(self):
+        super().__init__()
 
     # def coverage(self):
-    #     # custom_coverage = set()
-    #     # for entry in self.trace():
-    #     #     function_name, line_number = entry
-    #     #     # Track custom coverage based on your criteria
-    #     #     self.track_custom_coverage(function_name, line_number)
-    #     #     custom_coverage.add(entry)
-    #     return self.branch_coverage
+    #     """The set of executed line pairs"""
+    #     coverage = set()
+    #     past_line = None
+    #     for line in self.trace():
+    #         if past_line is not None:
+    #             coverage.add((past_line, line))
+    #         past_line = line
+        
+    #     # print(f"coverage={coverage}")
+
+    #     return coverage
+    
     def coverage(self) -> Set[cv.Location]:
         """The set of executed lines, as (function_name, line_number) pairs"""
         return set(self.trace())
 
+    # def coverage(self):
+    #     return self.branch_coverage
 
-class MyFunctionCoverageRunner(mf.FunctionRunner):
+class MyFunctionRunner(Runner):
+    def __init__(self, function: Callable) -> None:
+        """Initialize.  `function` is a function to be executed"""
+        self.function = function
+
+    def run_function(self, inp: str) -> Any:
+        return self.function(inp)
+
+    def run(self, inp: str) -> Tuple[Any, str]:
+        try:
+            result = self.run_function(inp)
+            outcome = self.PASS
+        except Exception:
+            result = None
+            outcome = self.FAIL
+
+        return result, outcome
+
+
+class MyFunctionCoverageRunner(MyFunctionRunner):
     def run_function(self, inp: str) -> Any:
         with MyCoverage() as cov:
             try:
@@ -56,40 +70,41 @@ class MyFunctionCoverageRunner(mf.FunctionRunner):
         self._coverage = cov.coverage()
         return result
 
-    def coverage(self) -> Set[cv.Location]:
+    def coverage(self):
         return self._coverage
 
-## You can re-implement the fuzzer class to change your
-## fuzzer's overall structure
 
-# class MyFuzzer(gbf.GreyboxFuzzer):
-#
-#     def reset(self):
-#           <your implementation here>
-#
-#     def run(self, runner: gbf.FunctionCoverageRunner):
-#           <your implementation here>
-#   etc...
+class MyMutationCoverageFuzzer(mf.MutationFuzzer):
+    """Fuzz with mutated inputs based on coverage"""
 
-## The Mutator and Schedule classes can also be extended or
-## replaced by you to create your own fuzzer!
+    def reset(self) -> None:
+        super().reset()
+        self.coverages_seen: Set[frozenset] = set()
+        # Now empty; we fill this with seed in the first fuzz runs
+        self.population = []
+
+    def run(self, runner: MyFunctionCoverageRunner) -> Any:
+        """Run function(inp) while tracking coverage.
+           If we reach new coverage,
+           add inp to population and its coverage to population_coverage
+        """
+        result, outcome = super().run(runner)
+        new_coverage = frozenset(runner.coverage())
+        if outcome == MyFunctionRunner.PASS and new_coverage not in self.coverages_seen:
+            # We have new coverage
+            self.population.append(self.inp)
+            self.coverages_seen.add(new_coverage)
+
+        return result
 
 
-    
-# When executed, this program should run your fuzzer for a very 
-# large number of iterations. The benchmarking framework will cut 
-# off the run after a maximum amount of time
-#
-# The `get_initial_corpus` and `entrypoint` functions will be provided
-# by the benchmarking framework in a file called `bug.py` for each 
-# benchmarking run. The framework will track whether or not the bug was
-# found by your fuzzer -- no need to keep track of crashing inputs
 if __name__ == "__main__":
     seed_inputs = get_initial_corpus()
     fast_schedule = gbf.AFLFastSchedule(5)
     line_runner = MyFunctionCoverageRunner(entrypoint)
 
     fast_fuzzer = gbf.CountingGreyboxFuzzer(seed_inputs, gbf.Mutator(), fast_schedule)
-    fast_fuzzer.runs(line_runner, trials=999999999)
+    fast_fuzzer.runs(line_runner, trials=9999)
 
-# runner is the one that accesses the coverage!
+    # my_mutation_fuzzer = MyMutationCoverageFuzzer(seed_inputs)
+    # my_mutation_fuzzer.runs(line_runner, trials=9999)
