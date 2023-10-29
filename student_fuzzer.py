@@ -7,7 +7,9 @@ import traceback
 import numpy as np
 import time
 
-from typing import Any, Set, Callable, Tuple
+from typing import Any, Set, Callable, Tuple, Union
+import pickle
+import hashlib
 
 from bug import entrypoint
 from bug import get_initial_corpus
@@ -19,25 +21,16 @@ class MyCoverage(cv.Coverage): # path coverage, not line coverage originally
     def __init__(self):
         super().__init__()
 
-    # def coverage(self):
-    #     """The set of executed line pairs"""
-    #     coverage = set()
-    #     past_line = None
-    #     for line in self.trace():
-    #         if past_line is not None:
-    #             coverage.add((past_line, line))
-    #         past_line = line
-        
-    #     # print(f"coverage={coverage}")
+    def coverage(self):
+        """The set of executed line pairs"""
+        coverage = set()
+        past_line = None
+        for line in self.trace():
+            if past_line is not None:
+                coverage.add((past_line, line))
+            past_line = line
 
-    #     return coverage
-    
-    def coverage(self) -> Set[cv.Location]:
-        """The set of executed lines, as (function_name, line_number) pairs"""
-        return set(self.trace())
-
-    # def coverage(self):
-    #     return self.branch_coverage
+        return coverage
 
 class MyFunctionRunner(Runner):
     def __init__(self, function: Callable) -> None:
@@ -73,29 +66,54 @@ class MyFunctionCoverageRunner(MyFunctionRunner):
     def coverage(self):
         return self._coverage
 
+def getPathID(coverage: Any) -> str:
+    """Returns a unique hash for the covered statements"""
+    pickled = pickle.dumps(coverage)
+    return hashlib.md5(pickled).hexdigest()
 
-class MyMutationCoverageFuzzer(mf.MutationFuzzer):
-    """Fuzz with mutated inputs based on coverage"""
 
-    def reset(self) -> None:
-        super().reset()
-        self.coverages_seen: Set[frozenset] = set()
-        # Now empty; we fill this with seed in the first fuzz runs
-        self.population = []
+class Seed:
+    """Represent an input with additional attributes"""
 
-    def run(self, runner: MyFunctionCoverageRunner) -> Any:
+    def __init__(self, data: str) -> None:
+        """Initialize from seed data"""
+        self.data = data
+
+        # These will be needed for advanced power schedules
+        self.coverage = set()
+        self.distance: Union[int, float] = -1
+        self.energy = 0.0
+
+    def __str__(self) -> str:
+        """Returns data as string representation of the seed"""
+        return self.data
+
+    __repr__ = __str__
+
+class MyCountingGreyboxFuzzer(gbf.CountingGreyboxFuzzer):
+    def run(self, runner: MyFunctionCoverageRunner) -> Tuple[Any, str]:  # type: ignore
         """Run function(inp) while tracking coverage.
            If we reach new coverage,
            add inp to population and its coverage to population_coverage
         """
         result, outcome = super().run(runner)
         new_coverage = frozenset(runner.coverage())
-        if outcome == MyFunctionRunner.PASS and new_coverage not in self.coverages_seen:
-            # We have new coverage
-            self.population.append(self.inp)
-            self.coverages_seen.add(new_coverage)
 
-        return result
+        path_id = getPathID(runner.coverage())
+        if path_id not in self.schedule.path_frequency:
+            self.schedule.path_frequency[path_id] = 1
+        else:
+            self.schedule.path_frequency[path_id] += 1
+
+        if new_coverage not in self.coverages_seen:
+            # We have new coverage
+            seed = Seed(self.inp)
+            seed.coverage = runner.coverage()
+            self.coverages_seen.add(new_coverage)
+            self.population.append(seed)
+
+        return (result, outcome)
+    
 
 
 if __name__ == "__main__":
@@ -103,8 +121,5 @@ if __name__ == "__main__":
     fast_schedule = gbf.AFLFastSchedule(5)
     line_runner = MyFunctionCoverageRunner(entrypoint)
 
-    fast_fuzzer = gbf.CountingGreyboxFuzzer(seed_inputs, gbf.Mutator(), fast_schedule)
+    fast_fuzzer = MyCountingGreyboxFuzzer(seed_inputs, gbf.Mutator(), fast_schedule)
     fast_fuzzer.runs(line_runner, trials=9999)
-
-    # my_mutation_fuzzer = MyMutationCoverageFuzzer(seed_inputs)
-    # my_mutation_fuzzer.runs(line_runner, trials=9999)
