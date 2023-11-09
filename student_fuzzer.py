@@ -122,4 +122,4 @@ if __name__ == "__main__":
     line_runner = MyFunctionCoverageRunner(entrypoint)
 
     fast_fuzzer = MyCountingGreyboxFuzzer(seed_inputs, gbf.Mutator(), fast_schedule)
-    fast_fuzzer.runs(line_runner, trials=9999)
+    fast_fuzzer.runs(line_runner, trials=99999999999999)
