@@ -83,4 +83,7 @@ if __name__ == "__main__":
     # line_runner = mf.FunctionCoverageRunner(entrypoint)
 
     fast_fuzzer = gbf.CountingGreyboxFuzzer(seed_inputs, gbf.Mutator(), fast_schedule)
-    fast_fuzzer.runs(line_runner, trials=999999999)
+    n = 99999999
+    start = time.time()
+    fast_fuzzer.runs(line_runner, trials=n)
+    end = time.time()
